@@ -1,0 +1,134 @@
+#!/bin/bash
+
+# Function to display usage information
+usage() {
+    echo "Advanced Network Scanner"
+    echo "Usage: ./enhanced_ipsweep.sh [OPTIONS] <network_prefix>"
+    echo "Options:"
+    echo "  -t <timeout>     Set ping timeout in seconds (default: 1)"
+    echo "  -c <count>       Number of pings to send (default: 1)"
+    echo "  -p <port>        Also scan a specific port on responding hosts"
+    echo "  -r <range>       Specify custom IP range (e.g., 5-100)"
+    echo "  -o <output>      Save results to file"
+    echo "  -v               Verbose mode"
+    echo "Example: ./enhanced_ipsweep.sh -t 2 -p 22 -o results.txt 192.168.1"
+    exit 1
+}
+
+# Default values
+TIMEOUT=1
+COUNT=1
+PORT=""
+RANGE="1-254"
+OUTPUT=""
+VERBOSE=false
+
+# Parse command line options
+while getopts "t:c:p:r:o:vh" opt; do
+    case $opt in
+        t) TIMEOUT=$OPTARG ;;
+        c) COUNT=$OPTARG ;;
+        p) PORT=$OPTARG ;;
+        r) RANGE=$OPTARG ;;
+        o) OUTPUT=$OPTARG ;;
+        v) VERBOSE=true ;;
+        h) usage ;;
+        *) usage ;;
+    esac
+done
+
+# Shift to the network prefix argument
+shift $((OPTIND-1))
+
+# Check if network prefix was provided
+if [ "$1" == "" ]; then
+    echo "Error: You must provide a network prefix!"
+    usage
+fi
+
+# Extract range numbers
+START_RANGE=$(echo $RANGE | cut -d '-' -f 1)
+END_RANGE=$(echo $RANGE | cut -d '-' -f 2)
+
+# Temp file for live hosts
+LIVE_HOSTS="/tmp/live_hosts_$$"
+touch $LIVE_HOSTS
+
+echo "Scanning network $1.[$START_RANGE-$END_RANGE]..."
+echo "Started at $(date)"
+
+# Counter for live hosts
+LIVE_COUNT=0
+
+# Function to scan a port if specified
+scan_port() {
+    local host=$1
+    local port=$2
+    
+    if [ "$VERBOSE" = true ]; then
+        echo "Scanning port $port on $host..."
+    fi
+    
+    # Use timeout to prevent hanging on filtered ports
+    timeout 1 bash -c "echo > /dev/tcp/$host/$port" 2>/dev/null
+    if [ $? -eq 0 ]; then
+        echo "$host:$port is OPEN"
+        return 0
+    else
+        if [ "$VERBOSE" = true ]; then
+            echo "$host:$port is closed or filtered"
+        fi
+        return 1
+    fi
+}
+
+# Loop through IP range
+for ip in $(seq $START_RANGE $END_RANGE); do
+    if [ "$VERBOSE" = true ]; then
+        echo "Pinging $1.$ip..."
+    fi
+    
+    # Perform a ping with a specified timeout and count
+    ping -c $COUNT -W $TIMEOUT $1.$ip | grep "64 bytes" | cut -d " " -f 4 | tr -d ":" > /dev/null 2>&1
+    
+    if [ $? -eq 0 ]; then
+        HOSTNAME=$(host $1.$ip 2>/dev/null | cut -d " " -f 5)
+        if [ $? -ne 0 ]; then
+            HOSTNAME="Unknown"
+        fi
+        
+        # Print result
+        echo "Host $1.$ip is UP (Hostname: $HOSTNAME)"
+        
+        # Add to the live hosts file
+        echo "$1.$ip" >> $LIVE_HOSTS
+        
+        # Increment counter
+        LIVE_COUNT=$((LIVE_COUNT+1))
+        
+        # Check the port if specified
+        if [ ! -z "$PORT" ]; then
+            scan_port "$1.$ip" "$PORT"
+        fi
+    fi
+done
+
+echo "Scan completed at $(date)"
+echo "Found $LIVE_COUNT live hosts in network $1.[$START_RANGE-$END_RANGE]"
+
+# Save results if the output file was specified
+if [ ! -z "$OUTPUT" ]; then
+    {
+        echo "Network scan results for $1.[$START_RANGE-$END_RANGE]"
+        echo "Scan performed on $(date)"
+        echo "Found $LIVE_COUNT live hosts"
+        echo "----------------------------------------"
+        cat $LIVE_HOSTS
+    } > "$OUTPUT"
+    echo "Results saved to $OUTPUT"
+fi
+
+# Clean up
+rm $LIVE_HOSTS
+
+exit 0
