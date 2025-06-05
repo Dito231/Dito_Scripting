@@ -15,4 +15,4 @@ elif o == "*":
 elif o == "**" or o == "^":
     print(x ** y)
 else:
-    print("Unknown operator.")
+    print("Unknown Operator.")
